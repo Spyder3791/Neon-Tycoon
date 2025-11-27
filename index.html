@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Neon Tycoon v2.1 (Stability Guide)</title>
+    <title>Neon Tycoon v2.1 (Managers Update)</title>
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
     <style>
         /* --- CSS VARIABLES --- */
@@ -128,6 +128,10 @@
         .list-item { 
             background: rgba(0,0,0,0.6); border: 1px solid #444; padding: 12px; 
             display: flex; justify-content: space-between; align-items: center; border-radius: 6px; flex-shrink: 0;
+        }
+        
+        .manager-item {
+            background: rgba(50, 40, 0, 0.6); border: 1px solid var(--neon-yellow);
         }
 
         /* --- STOCK CARD --- */
@@ -320,11 +324,21 @@
                 </div>
 
                 <div id="tab-staff" class="tab-content active">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-shrink: 0;">
-                        <span>HUMAN RESOURCES <span id="staff-counter" style="font-size:0.8rem; color:#888;">(0/10)</span></span>
-                        <button class="btn" id="btn-hire" style="font-size: 0.8rem;">HIRE ($<span id="hire-cost">500</span>)</button>
+                    <div class="scroll-list">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; flex-shrink: 0;">
+                            <span>HUMAN RESOURCES <span id="staff-counter" style="font-size:0.8rem; color:#888;">(0/10)</span></span>
+                            <button class="btn" id="btn-hire" style="font-size: 0.8rem;">HIRE ($<span id="hire-cost">500</span>)</button>
+                        </div>
+                        <div id="staff-list" style="margin-bottom: 20px;"></div>
+
+                        <div style="border-top: 1px dashed #444; margin-bottom: 20px;"></div>
+
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; flex-shrink: 0;">
+                            <span style="color: var(--neon-yellow);">EXECUTIVE BOARD <span id="manager-counter" style="font-size:0.8rem;">(0/3)</span></span>
+                            <button class="btn" id="btn-hire-manager" style="font-size: 0.8rem; border-color: var(--neon-yellow); color: var(--neon-yellow);" onclick="hireManager()">HEADHUNT ($50k)</button>
+                        </div>
+                        <div id="manager-list"></div>
                     </div>
-                    <div id="staff-list" class="scroll-list"></div>
                 </div>
 
                 <div id="tab-blackmarket" class="tab-content">
@@ -381,7 +395,7 @@
                 <li style="margin-bottom: 8px;"><span style="color: var(--neon-red)">BELOW 20%:</span> Riots! Passive income reduced by 50%.</li>
                 <li style="margin-bottom: 8px;"><span style="color: red; font-weight: bold;">AT 0%:</span> MARTIAL LAW. All passive income stops.</li>
             </ul>
-            <p style="text-align: center; color: #aaa; font-size: 0.8rem;">Use "BRIBE OFFICIALS" to restore order.</p>
+            <p style="text-align: center; color: #aaa; font-size: 0.8rem;">Managers with "PR Specialist" perk reduce decay.</p>
             <div style="text-align: center;">
                 <button class="btn" onclick="closeModal('stability-help-modal')">UNDERSTOOD</button>
             </div>
@@ -399,8 +413,8 @@
 
     <div id="hire-modal" class="modal-overlay">
         <div class="popup-box">
-            <h3 style="color: var(--neon-blue);">NEW CONTRACT</h3>
-            <p>Enter new employee designation:</p>
+            <h3 style="color: var(--neon-blue);" id="modal-title-text">NEW CONTRACT</h3>
+            <p>Enter designation:</p>
             <input type="text" id="new-hire-name" maxlength="15" placeholder="e.g. Cyber-Smith">
             <div style="margin-top: 20px; display: flex; justify-content: center; gap: 10px;">
                 <button class="btn btn-danger" onclick="closeModal('hire-modal')">CANCEL</button>
@@ -431,18 +445,28 @@
 
     <script>
         const MAX_STAFF = 10;
+        const MAX_MANAGERS = 3;
+        const MANAGER_COST = 50000;
+        
         const DEFAULT_STATE = {
             name: "", corp: "", 
             logo: null, 
             avatar: null, 
             cash: 0, clicks: 0, 
-            staff: [], upgrades: [], stocks: {},
+            staff: [], managers: [], upgrades: [], stocks: {},
             hireCost: 500, clickLevel: 0, achievements: [], rocketStage: 0,
             stability: 100,
-            marketPrices: {}, // SAVED PRICES
-            marketHistory: [] // SAVED CHART
+            marketPrices: {}, 
+            marketHistory: [] 
         };
         
+        const MANAGER_PERKS = [
+            { id: 'click_boost', name: 'Micro-Manager', desc: '+50% Click Power', type: 'click', val: 1.5 },
+            { id: 'passive_boost', name: 'Efficiency Expert', desc: '+50% Staff Income', type: 'passive', val: 1.5 },
+            { id: 'stability_boost', name: 'PR Specialist', desc: 'Stability Decay Halved', type: 'stability', val: 0.5 },
+            { id: 'market_shark', name: 'Wolf of Wall St', desc: 'Passive Income x2', type: 'passive', val: 2.0 } 
+        ];
+
         const STOCKS = [
             { sym: "OMNI", price: 100, vol: 0.05 }, { sym: "ZION", price: 45, vol: 0.08 },
             { sym: "FLUX", price: 250, vol: 0.03 }, { sym: "AURA", price: 15, vol: 0.15 },
@@ -493,6 +517,7 @@
 
         let state = { ...DEFAULT_STATE };
         let cooldown = false;
+        let hiringType = 'staff'; // 'staff' or 'manager'
 
         function init() {
             if(localStorage.getItem('neonV21')) {
@@ -500,7 +525,8 @@
                     let loaded = JSON.parse(localStorage.getItem('neonV21'));
                     state = { ...DEFAULT_STATE, ...loaded };
                     if(typeof state.stability === 'undefined') state.stability = 100;
-                    
+                    if(!state.managers) state.managers = []; // Migration for managers
+
                     // RESTORE MARKET PRICES
                     STOCKS.forEach(s => {
                         let val = state.stocks[s.sym];
@@ -596,6 +622,14 @@
             newsLoop();
         }
 
+        function getManagerBonus(type) {
+            let mult = 1;
+            state.managers.forEach(m => {
+                if(m.perk.type === type || m.perk.type === 'all') mult *= m.perk.val;
+            });
+            return mult;
+        }
+
         function getClickPower() {
             let base = Math.floor(1 * Math.pow(1.5, state.clickLevel));
             let mult = 1;
@@ -603,6 +637,7 @@
                 let u = UPGRADES.find(x => x.id === id);
                 if(u && (u.type === 'click' || u.type === 'all')) mult *= u.mult;
             });
+            mult *= getManagerBonus('click');
             return Math.floor(base * mult);
         }
 
@@ -613,6 +648,7 @@
                 let u = UPGRADES.find(x => x.id === id);
                 if(u && (u.type === 'passive' || u.type === 'all')) mult *= u.mult;
             });
+            mult *= getManagerBonus('passive');
             
             // CRISIS PENALTY
             if (state.stability <= 0) return 0; // Martial Law
@@ -643,7 +679,9 @@
 
         function stabilityLoop() {
             if(state.stability > 0) {
-                state.stability -= 0.2; // -0.2% per second
+                let decay = 0.2;
+                decay *= getManagerBonus('stability'); // Apply manager perk (0.5 val = half decay)
+                state.stability -= decay; 
                 if(state.stability < 0) state.stability = 0;
             }
             updateStabilityUI();
@@ -773,8 +811,21 @@
         }
 
         document.getElementById('btn-hire').onclick = () => {
+            hiringType = 'staff';
             if(state.staff.length >= MAX_STAFF) return alert("STAFF CAPACITY REACHED.");
             if(state.cash >= state.hireCost) {
+                document.getElementById('modal-title-text').innerText = "NEW EMPLOYEE";
+                document.getElementById('hire-modal').style.display = 'flex';
+                document.getElementById('new-hire-name').value = '';
+                document.getElementById('new-hire-name').focus();
+            }
+        };
+
+        window.hireManager = () => {
+            hiringType = 'manager';
+            if(state.managers.length >= MAX_MANAGERS) return alert("BOARD CAPACITY REACHED.");
+            if(state.cash >= MANAGER_COST) {
+                document.getElementById('modal-title-text').innerText = "HEADHUNT MANAGER";
                 document.getElementById('hire-modal').style.display = 'flex';
                 document.getElementById('new-hire-name').value = '';
                 document.getElementById('new-hire-name').focus();
@@ -782,10 +833,21 @@
         };
 
         function confirmHire() {
-            let name = document.getElementById('new-hire-name').value || "Drone-" + (state.staff.length+1);
-            state.cash -= state.hireCost;
-            state.staff.push({ name: name, income: 10 + (state.staff.length * 5) });
-            state.hireCost = Math.floor(state.hireCost * 1.5);
+            let name = document.getElementById('new-hire-name').value;
+            
+            if(hiringType === 'staff') {
+                if(!name) name = "Drone-" + (state.staff.length+1);
+                state.cash -= state.hireCost;
+                state.staff.push({ name: name, income: 10 + (state.staff.length * 5) });
+                state.hireCost = Math.floor(state.hireCost * 1.5);
+            } else {
+                if(!name) name = "Executive-" + (state.managers.length+1);
+                state.cash -= MANAGER_COST;
+                // Assign Random Perk
+                let perk = MANAGER_PERKS[Math.floor(Math.random() * MANAGER_PERKS.length)];
+                state.managers.push({ name: name, perk: perk });
+            }
+
             closeModal('hire-modal');
             updateUI(); renderLists();
         }
@@ -796,6 +858,13 @@
                 updateUI(); renderLists();
             }
         }
+        
+        window.fireManager = (index) => {
+            if(confirm(`Terminate Executive ${state.managers[index].name}? You will lose their perk.`)) {
+                state.managers.splice(index, 1);
+                updateUI(); renderLists();
+            }
+        };
 
         function buyUpgrade(id) {
             let u = UPGRADES.find(x => x.id === id);
@@ -807,6 +876,7 @@
         }
 
         function renderLists() {
+            // Render Staff
             const sl = document.getElementById('staff-list');
             sl.innerHTML = state.staff.length ? '' : '<div style="text-align:center; color:#555;">No staff online.</div>';
             [...state.staff].reverse().forEach((s, i) => {
@@ -821,6 +891,23 @@
                     </div>`;
             });
 
+            // Render Managers
+            const ml = document.getElementById('manager-list');
+            ml.innerHTML = state.managers.length ? '' : '<div style="text-align:center; color:#555;">Board seats empty.</div>';
+            [...state.managers].reverse().forEach((m, i) => {
+                let realIndex = state.managers.length - 1 - i;
+                ml.innerHTML += `
+                    <div class="list-item manager-item">
+                        <div>
+                            <div style="font-weight:bold; color:var(--neon-yellow);">${m.name}</div>
+                            <div style="font-size:0.8rem; color:#ccc;">${m.perk.name}</div>
+                            <div style="font-size:0.7rem; color:var(--neon-green)">${m.perk.desc}</div>
+                        </div>
+                        <button class="btn btn-danger btn-sm" onclick="fireManager(${realIndex})">FIRE</button>
+                    </div>`;
+            });
+
+            // Render Upgrades
             const ul = document.getElementById('upgrade-list');
             const al = document.getElementById('acquired-list');
             ul.innerHTML = ''; al.innerHTML = '';
@@ -1048,6 +1135,13 @@
             if(state.staff.length >= MAX_STAFF) { hireBtn.disabled = true; hireBtn.innerText = "FULL"; } 
             else { hireBtn.disabled = state.cash < state.hireCost; hireBtn.innerText = `HIRE ($${state.hireCost.toLocaleString()})`; }
             document.getElementById('staff-counter').innerText = `(${state.staff.length}/${MAX_STAFF})`;
+            
+            // Managers UI
+            let manBtn = document.getElementById('btn-hire-manager');
+            if(state.managers.length >= MAX_MANAGERS) { manBtn.disabled = true; manBtn.innerText = "FULL"; }
+            else { manBtn.disabled = state.cash < MANAGER_COST; manBtn.innerText = `HEADHUNT ($${MANAGER_COST.toLocaleString()})`; }
+            document.getElementById('manager-counter').innerText = `(${state.managers.length}/${MAX_MANAGERS})`;
+
             checkAchievements(); updateRocketUI(); updateStabilityUI();
         }
 
