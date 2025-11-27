@@ -438,7 +438,9 @@
             cash: 0, clicks: 0, 
             staff: [], upgrades: [], stocks: {},
             hireCost: 500, clickLevel: 0, achievements: [], rocketStage: 0,
-            stability: 100 // NEW: Starts at 100%
+            stability: 100,
+            marketPrices: {}, // SAVED PRICES
+            marketHistory: [] // SAVED CHART
         };
         
         const STOCKS = [
@@ -490,7 +492,6 @@
         ];
 
         let state = { ...DEFAULT_STATE };
-        let marketHistory = [];
         let cooldown = false;
 
         function init() {
@@ -498,14 +499,28 @@
                 try {
                     let loaded = JSON.parse(localStorage.getItem('neonV21'));
                     state = { ...DEFAULT_STATE, ...loaded };
-                    if(typeof state.stability === 'undefined') state.stability = 100; // Migration
+                    if(typeof state.stability === 'undefined') state.stability = 100;
+                    
+                    // RESTORE MARKET PRICES
                     STOCKS.forEach(s => {
                         let val = state.stocks[s.sym];
                         if (typeof val === 'number') state.stocks[s.sym] = { qty: val, avg: 0 };
                         else if (!val) state.stocks[s.sym] = { qty: 0, avg: 0 };
+                        
+                        // Overwrite base price with saved price if exists
+                        if(state.marketPrices && state.marketPrices[s.sym]) {
+                            s.price = state.marketPrices[s.sym];
+                        }
                     });
+
                     startGame();
-                } catch(e) { console.log("Save Error"); showSetup(); }
+                    
+                    // Restore chart
+                    if(state.marketHistory && state.marketHistory.length > 0) {
+                         drawChart(state.marketHistory[state.marketHistory.length-1]);
+                    }
+
+                } catch(e) { console.log("Save Error", e); showSetup(); }
             } else {
                 showSetup();
             }
@@ -573,7 +588,7 @@
             updateRocketUI(); 
             
             setInterval(passiveLoop, 1000);
-            setInterval(stabilityLoop, 1000); // NEW LOOP
+            setInterval(stabilityLoop, 1000); 
             setInterval(marketLoop, 3000); 
             setInterval(newsLoop, 15000);
             setInterval(() => saveGame(true), 10000); 
@@ -626,10 +641,8 @@
             if(inc > 0) { state.cash += inc; updateUI(); }
         }
 
-        // --- NEW STABILITY LOGIC ---
         function stabilityLoop() {
             if(state.stability > 0) {
-                // Decay MODIFIED to 0.2
                 state.stability -= 0.2; // -0.2% per second
                 if(state.stability < 0) state.stability = 0;
             }
@@ -645,7 +658,6 @@
             txt.innerText = state.stability.toFixed(1) + '%';
             fill.style.width = state.stability + '%';
             
-            // Colors & States
             if(state.stability > 50) {
                 fill.style.backgroundColor = 'var(--neon-green)';
                 overlay.innerText = "STABLE";
@@ -664,7 +676,7 @@
                 repairBtn.style.display = 'block';
                 repairBtn.innerText = "RESTORE ORDER ($10,000)";
             } else {
-                fill.style.width = '100%'; // Full red bar
+                fill.style.width = '100%'; 
                 fill.style.backgroundColor = 'var(--neon-red)';
                 overlay.innerText = "MARTIAL LAW (INCOME FROZEN)";
                 repairBtn.style.display = 'block';
@@ -836,6 +848,9 @@
                 let change = (Math.random() - 0.5) * s.vol * 2; 
                 s.price = Math.max(1, s.price * (1 + change));
                 index += s.price;
+                // SAVE PRICE TO STATE FOR PERSISTENCE
+                if(!state.marketPrices) state.marketPrices = {};
+                state.marketPrices[s.sym] = s.price;
             });
             renderStocks(); drawChart(index);
         }
@@ -902,19 +917,48 @@
         };
 
         function drawChart(val) {
-            marketHistory.push(val);
-            if(marketHistory.length > 50) marketHistory.shift();
+            // SYNC HISTORY TO STATE
+            if(!state.marketHistory) state.marketHistory = [];
+            state.marketHistory.push(val);
+            if(state.marketHistory.length > 50) state.marketHistory.shift();
+            
             const cvs = document.getElementById('market-chart');
             if(cvs.parentElement.clientWidth > 0) { cvs.width = cvs.parentElement.clientWidth; cvs.height = cvs.parentElement.clientHeight; }
             const ctx = cvs.getContext('2d');
             ctx.clearRect(0,0,cvs.width, cvs.height);
-            if(marketHistory.length < 2) return;
-            const min = Math.min(...marketHistory) * 0.95; const max = Math.max(...marketHistory) * 1.05; const range = max - min;
+            
+            // DRAW GRIDLINES
+            ctx.strokeStyle = 'rgba(0, 243, 255, 0.1)';
+            ctx.lineWidth = 1;
+            ctx.setLineDash([5, 5]); // Dashed lines
+            
+            // Horizontal Grid
+            for(let i=1; i<5; i++) {
+                let y = (cvs.height / 5) * i;
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(cvs.width, y);
+                ctx.stroke();
+            }
+            
+            // Vertical Grid
+            for(let i=1; i<10; i++) {
+                let x = (cvs.width / 10) * i;
+                ctx.beginPath();
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, cvs.height);
+                ctx.stroke();
+            }
+
+            if(state.marketHistory.length < 2) return;
+            const min = Math.min(...state.marketHistory) * 0.95; const max = Math.max(...state.marketHistory) * 1.05; const range = max - min;
             const w = cvs.width; const h = cvs.height;
-            ctx.strokeStyle = marketHistory[marketHistory.length-1] > marketHistory[0] ? '#39ff14' : '#ff3939';
+            
+            ctx.setLineDash([]); // Reset to solid line for chart
+            ctx.strokeStyle = state.marketHistory[state.marketHistory.length-1] > state.marketHistory[0] ? '#39ff14' : '#ff3939';
             ctx.lineWidth = 2; ctx.beginPath();
-            marketHistory.forEach((v, i) => {
-                let x = (i / (marketHistory.length - 1)) * w; let y = h - ((v - min) / range) * h;
+            state.marketHistory.forEach((v, i) => {
+                let x = (i / (state.marketHistory.length - 1)) * w; let y = h - ((v - min) / range) * h;
                 if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
             });
             ctx.stroke();
